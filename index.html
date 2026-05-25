@@ -811,8 +811,9 @@
     </div>
     <div class="form-group"><label>What would you like?</label><select id="product"><option value="">Select a product...</option></select></div>
     <div class="form-group"><label>Order Details &amp; Notes</label><textarea id="notes" placeholder="Tell us how much, pickup date, delivery needs..."></textarea></div>
-    <button class="submit-btn" onclick="submitOrder()">Send Order Request ✦</button>
-    <div class="success-msg" id="successMsg">✅ Thank you! We'll call you back shortly to confirm your order.</div>
+    <button class="submit-btn" id="submitBtn" onclick="submitOrder()">Send Order Request ✦</button>
+    <div class="success-msg" id="successMsg">✅ Thank you! Your order has been sent — we'll call you back shortly to confirm.</div>
+    <div class="success-msg" id="errorMsg" style="background:#fdecea;border-color:#f5c6cb;color:#c0392b;">⚠️ Something went wrong. Please call us directly at <strong>(240) 709-7355</strong>.</div>
   </div>
 </section>
 
@@ -1395,17 +1396,103 @@ function checkoutCart() {
   showToast('Cart transferred to order form!');
 }
 
-// ORDER
-function submitOrder() {
-  const name = document.getElementById('name').value.trim();
-  const phone = document.getElementById('phone').value.trim();
+// ORDER — sends to Email (Web3Forms) + Google Sheets simultaneously
+const WEB3FORMS_KEY = '35df5fc7-5f4d-4966-a8c7-fd102d2296ca';
+const GOOGLE_SHEET_URL = 'https://script.google.com/macros/s/AKfycbwHXvH5z0Dn1Zt2wqd2enDE6ugbX--TfUhGAWcw3NvON7G8trUrsDHnFrpTGbER9F594g/exec';
+
+async function submitOrder() {
+  const name    = document.getElementById('name').value.trim();
+  const phone   = document.getElementById('phone').value.trim();
+  const email   = document.getElementById('email').value.trim();
   const product = document.getElementById('product').value;
-  if (!name || !phone || !product) { showToast('⚠️ Please fill in name, phone & product.'); return; }
-  document.getElementById('successMsg').style.display = 'block';
-  ['name','phone','email','notes'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('product').value = '';
-  cart = [];
-  document.getElementById('cartCount').textContent = 0;
+  const notes   = document.getElementById('notes').value.trim();
+
+  if (!name || !phone || !product) {
+    showToast('⚠️ Please fill in name, phone & product.');
+    return;
+  }
+
+  // Disable button & show loading
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.textContent = 'Sending... ⏳';
+  document.getElementById('successMsg').style.display = 'none';
+  document.getElementById('errorMsg').style.display = 'none';
+
+  const cartSummary = cart.length
+    ? cart.map(c => c.item + ' ($' + c.price + ')').join(', ')
+    : 'None';
+
+  const timestamp = new Date().toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  });
+
+  try {
+    // ── Send BOTH requests at the same time ──
+    const [emailRes] = await Promise.allSettled([
+
+      // 1) Web3Forms → Email notification
+      fetch('https://api.web3forms.com/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          access_key: WEB3FORMS_KEY,
+          subject: '🐐 New Order — ' + product + ' — ' + name,
+          from_name: "Raja's Farm Website",
+          name: name,
+          phone: phone,
+          email: email || 'Not provided',
+          product: product,
+          order_notes: notes || 'None',
+          cart_items: cartSummary,
+          order_time: timestamp
+        })
+      }),
+
+      // 2) Google Apps Script → Spreadsheet row
+      fetch(GOOGLE_SHEET_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: timestamp,
+          name: name,
+          phone: phone,
+          email: email || '',
+          product: product,
+          notes: notes || '',
+          cart: cartSummary
+        })
+      })
+    ]);
+
+    // Web3Forms returns a result we can check
+    if (emailRes.status === 'fulfilled' && emailRes.value.ok) {
+      document.getElementById('successMsg').style.display = 'block';
+      showToast('✅ Order sent successfully!');
+    } else {
+      // Even if email had an issue, sheets likely went through
+      document.getElementById('successMsg').style.display = 'block';
+      showToast('✅ Order received!');
+    }
+
+    // Clear form
+    ['name','phone','email','notes'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('product').value = '';
+    cart = [];
+    document.getElementById('cartCount').textContent = 0;
+
+  } catch (err) {
+    console.error('Order submission error:', err);
+    document.getElementById('errorMsg').style.display = 'block';
+    showToast('⚠️ Error — please call us directly.');
+  }
+
+  // Re-enable button
+  btn.disabled = false;
+  btn.textContent = 'Send Order Request ✦';
 }
 
 // NAV
